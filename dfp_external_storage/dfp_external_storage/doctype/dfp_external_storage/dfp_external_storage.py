@@ -723,7 +723,11 @@ def file(name:str, file:str):
 
 		try:
 			if not doc.dfp_is_s3_remote_file():
-				raise Exception("Remote storage unavailable")
+				local_file_url = (doc.file_url or "").strip()
+				if not local_file_url:
+					raise Exception("Local file URL unavailable")
+				frappe.flags.redirect_location = local_file_url
+				raise frappe.Redirect
 
 			storage_doc = doc.dfp_external_storage_doc
 			stream_buffer_size = 8192
