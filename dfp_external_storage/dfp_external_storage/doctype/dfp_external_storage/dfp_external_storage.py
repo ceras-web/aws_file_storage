@@ -331,7 +331,18 @@ class DFPExternalStorageFile(File):
 			return True
 
 	def dfp_is_cacheable(self):
-		return not self.is_private and self.dfp_external_storage_doc.setting_cache_files_smaller_than and self.dfp_file_size != 0 and self.dfp_file_size < self.dfp_external_storage_doc.setting_cache_files_smaller_than
+		if self.is_private:
+			return False
+		storage_doc = self.dfp_external_storage_doc
+		if not storage_doc:
+			return False
+		try:
+			cache_limit = int(storage_doc.setting_cache_files_smaller_than or 0)
+		except Exception:
+			cache_limit = 0
+		if cache_limit <= 0:
+			return False
+		return self.dfp_file_size != 0 and self.dfp_file_size < cache_limit
 
 	@cached_property
 	def dfp_file_size(self) -> int:
@@ -498,9 +509,16 @@ class DFPExternalStorageFile(File):
 		return content
 
 	def dfp_external_storage_stream_file(self) -> t.Iterable[bytes]:
+		storage_doc = self.dfp_external_storage_doc
+		buffer_size = 8192
+		if storage_doc:
+			try:
+				buffer_size = storage_doc.setting_stream_buffer_size
+			except Exception:
+				pass
 		return wrap_file(environ=frappe.local.request.environ,
 			file=self.dfp_external_storage_file_proxy(),
-				buffer_size=self.dfp_external_storage_doc.setting_stream_buffer_size)
+				buffer_size=buffer_size)
 
 	def download_to_local_and_remove_remote(self):
 		try:
@@ -704,12 +722,23 @@ def file(name:str, file:str):
 		response_values["headers"] = []
 
 		try:
+			if not doc.dfp_is_s3_remote_file():
+				raise Exception("Remote storage unavailable")
+
+			storage_doc = doc.dfp_external_storage_doc
+			stream_buffer_size = 8192
+			if storage_doc:
+				try:
+					stream_buffer_size = storage_doc.setting_stream_buffer_size
+				except Exception:
+					pass
+
 			presigned_url = doc.dfp_presigned_url_get()
 			if presigned_url:
 				frappe.flags.redirect_location = presigned_url
 				raise frappe.Redirect
 			# Do not stream file if cacheable or smaller than stream buffer chunks size
-			if doc.dfp_is_cacheable() or doc.dfp_file_size < doc.dfp_external_storage_doc.setting_stream_buffer_size:
+			if doc.dfp_is_cacheable() or doc.dfp_file_size < stream_buffer_size:
 				response_values["response"] = doc.dfp_external_storage_download_file()
 			else:
 				response_values["response"] = doc.dfp_external_storage_stream_file()
@@ -726,7 +755,7 @@ def file(name:str, file:str):
 			response_values["mimetype"] = doc.dfp_mime_type_guess_by_file_name
 		response_values["status"] = 200
 
-		if doc.dfp_is_cacheable():
+		if doc.dfp_is_cacheable() and doc.dfp_external_storage_doc:
 			frappe.cache().set_value(key=cache_key,
 				val=response_values,
 				expires_in_sec=doc.dfp_external_storage_doc.setting_cache_expiration_secs)
