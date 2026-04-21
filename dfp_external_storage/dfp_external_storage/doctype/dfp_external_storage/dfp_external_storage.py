@@ -398,14 +398,27 @@ class DFPExternalStorageFile(File):
 			local_file = "./" + frappe.local.site + is_public + self.file_url
 
 		try:
-			if not os.path.exists(local_file):
-				frappe.throw(_("Local file not found"))
-			with open(local_file, "rb") as f:
+			stream = None
+			length = 0
+			local_file_exists = bool(local_file and os.path.exists(local_file))
+			if local_file_exists:
+				stream = open(local_file, "rb")
+				length = os.path.getsize(local_file)
+			else:
+				content = self.get_content()
+				if isinstance(content, str):
+					content = content.encode()
+				if not content:
+					frappe.throw(_("Local file not found"))
+				stream = io.BytesIO(content)
+				length = len(content)
+
+			with stream as f:
 				self.dfp_external_storage_client.put_object(
 					bucket_name=self.dfp_external_storage_doc.bucket_name,
 					object_name=key,
 					data=f,
-					length=os.path.getsize(local_file),
+					length=length,
 					# Meta removed because same s3 file can be used within different File docs
 					# metadata={"frappe_file_id": self.name}
 				)
@@ -413,7 +426,8 @@ class DFPExternalStorageFile(File):
 			self.dfp_external_storage_s3_key = key
 			self.dfp_external_storage = self.dfp_external_storage_doc.name
 			self.file_url = f"/{DFP_EXTERNAL_STORAGE_URL_SEGMENT_FOR_FILE_LOAD}/{self.name}/{self.file_name}"
-			os.remove(local_file)
+			if local_file_exists:
+				os.remove(local_file)
 		except Exception as e:
 			error_msg = _("Error saving file in remote folder: {}").format(str(e))
 			frappe.log_error(f"{error_msg}: {self.file_name}", message=e)

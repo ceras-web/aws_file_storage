@@ -1,0 +1,1 @@
+- Hardened remote-file upload fallback for imported/backfilled `File` rows: when the expected local disk path is already gone, `dfp_external_storage_upload_file()` now streams from `File.get_content()` instead of erroring with `Local file not found`.
