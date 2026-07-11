@@ -18,6 +18,7 @@ from frappe.utils.password import get_decrypted_password
 
 
 DFP_EXTERNAL_STORAGE_PUBLIC_CACHE_PREFIX = "external_storage_public_file:"
+VOICE_ARTIFACT_ARCHIVE_DOCTYPE = "Voice Artifact Archive"
 
 # http://[host:port]/<file>/[File:name]/[File:file_name]
 # http://myhost.localhost:8000/file/c7baa5b2ff/my-image.png
@@ -372,6 +373,14 @@ class DFPExternalStorageFile(File):
 		Critical fields: "dfp_external_storage_s3_key", "dfp_external_storage" and "file_url"
 		:param local_file: if given, file path for reading the content. If not given, the content field of this File is used
 		"""
+		# A transient flag lets server-owned workflows enforce a no-provider local
+		# private-File contract. It is valid only before a new File selects storage.
+		if getattr(getattr(self, "flags", None), "dfp_force_local_storage", False):
+			if str(getattr(self, "is_private", 0) or "").strip().lower() not in {"1", "true"}:
+				frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
+			if self.dfp_external_storage or self.dfp_external_storage_s3_key:
+				frappe.throw(_("A force-local File cannot select or retain external storage."), frappe.ValidationError)
+			return False
 		if self.dfp_external_storage_ignored_doctypes():
 			self.dfp_external_storage = ""
 			return False
@@ -624,6 +633,15 @@ def hook_file_before_save(doc, method):
 	Critical fields: dfp_external_storage_s3_key, dfp_external_storage and file_url
 	"""
 	previous = doc.get_doc_before_save()
+	# This check must precede storage resolution/client construction.
+	if getattr(getattr(doc, "flags", None), "dfp_force_local_storage", False):
+		if str(getattr(doc, "is_private", 0) or "").strip().lower() not in {"1", "true"}:
+			frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
+		if previous or doc.dfp_external_storage or doc.dfp_external_storage_s3_key:
+			frappe.throw(_("Force-local storage is allowed only for a new local File."), frappe.ValidationError)
+		doc.dfp_external_storage = ""
+		doc.dfp_external_storage_s3_key = ""
+		return
 
 	if not previous:
 		# NEW "File": Case 1: remote selected => upload to remote and continue "File" flow
@@ -716,8 +734,25 @@ class DFPExternalStorageFileRenderer:
 		return file(name=file_id, file=file_name)
 
 
+def _is_voice_artifact_archive_file(name: str) -> bool:
+	"""Classify protected voice Files without touching storage or public cache."""
+
+	try:
+		table_exists = getattr(frappe.db, "table_exists", None)
+		if callable(table_exists) and not table_exists(VOICE_ARTIFACT_ARCHIVE_DOCTYPE):
+			return False
+		return bool(frappe.db.exists(VOICE_ARTIFACT_ARCHIVE_DOCTYPE, {"file": name}))
+	except Exception:
+		# A classification failure must not open the direct DFP route.
+		raise frappe.PageDoesNotExistError() from None
+
+
 def file(name:str, file:str):
 	if not name or not file:
+		raise frappe.PageDoesNotExistError()
+	if _is_voice_artifact_archive_file(name):
+		# Voice artifacts are served only by my_custom_app's permission-aware,
+		# range-capable broker. This check intentionally precedes public cache.
 		raise frappe.PageDoesNotExistError()
 
 	cache_key = f"{DFP_EXTERNAL_STORAGE_PUBLIC_CACHE_PREFIX}{name}"
