@@ -19,6 +19,7 @@ from frappe.utils.password import get_decrypted_password
 
 DFP_EXTERNAL_STORAGE_PUBLIC_CACHE_PREFIX = "external_storage_public_file:"
 VOICE_ARTIFACT_ARCHIVE_DOCTYPE = "Voice Artifact Archive"
+FORCE_LOCAL_REMOTE_URL_PREFIXES = ("http://", "https://", "/api/method/")
 
 # http://[host:port]/<file>/[File:name]/[File:file_name]
 # http://myhost.localhost:8000/file/c7baa5b2ff/my-image.png
@@ -38,7 +39,10 @@ def _validate_force_local_file(doc) -> None:
 		frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
 	if getattr(doc, "dfp_external_storage", None) or getattr(doc, "dfp_external_storage_s3_key", None):
 		frappe.throw(_("A force-local File cannot select or retain external storage."), frappe.ValidationError)
-	if str(getattr(doc, "file_url", "") or "").strip().lower().startswith(URL_PREFIXES):
+	# Keep the force-local boundary stable across supported Frappe versions.
+	# Older releases do not include API method URLs in ``URL_PREFIXES``.
+	remote_prefixes = tuple(URL_PREFIXES) + FORCE_LOCAL_REMOTE_URL_PREFIXES
+	if str(getattr(doc, "file_url", "") or "").strip().lower().startswith(remote_prefixes):
 		frappe.throw(_("A force-local File cannot reference a remote URL."), frappe.ValidationError)
 
 

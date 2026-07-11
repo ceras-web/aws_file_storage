@@ -107,6 +107,27 @@ class TestDFPExternalStorage(unittest.TestCase):
 				):
 					DFPExternalStorageFile.dfp_external_storage_upload_file(fake)
 
+	def test_force_local_api_url_rejection_does_not_depend_on_frappe_prefixes(self):
+		def raise_error(message, exc):
+			raise exc(message)
+
+		fake = SimpleNamespace(
+			flags=SimpleNamespace(dfp_force_local_storage=True),
+			is_private=1,
+			file_url="/api/method/example.download",
+			dfp_external_storage="",
+			dfp_external_storage_s3_key="",
+			get_doc_before_save=lambda: None,
+		)
+		module_path = (
+			"dfp_external_storage.dfp_external_storage.doctype.dfp_external_storage."
+			"dfp_external_storage.URL_PREFIXES"
+		)
+		with patch(module_path, ("http://", "https://")), patch.object(
+			frappe, "throw", side_effect=raise_error
+		), self.assertRaisesRegex(frappe.ValidationError, "cannot reference a remote URL"):
+			hook_file_before_save(fake, "before_save")
+
 	def test_force_local_flag_cannot_reclassify_existing_or_selected_storage(self):
 		def raise_error(message, exc):
 			raise exc(message)
