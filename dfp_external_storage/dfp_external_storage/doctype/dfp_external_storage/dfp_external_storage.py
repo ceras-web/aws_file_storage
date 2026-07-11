@@ -31,6 +31,17 @@ DFP_EXTERNAL_STORAGE_CRITICAL_FIELDS = [
 	"type", "endpoint", "secure", "bucket_name", "region", "access_key", "secret_key", "folders"]
 
 
+def _validate_force_local_file(doc) -> None:
+	"""Reject any force-local File state that is private in name only."""
+
+	if str(getattr(doc, "is_private", 0) or "").strip().lower() not in {"1", "true"}:
+		frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
+	if getattr(doc, "dfp_external_storage", None) or getattr(doc, "dfp_external_storage_s3_key", None):
+		frappe.throw(_("A force-local File cannot select or retain external storage."), frappe.ValidationError)
+	if str(getattr(doc, "file_url", "") or "").strip().lower().startswith(URL_PREFIXES):
+		frappe.throw(_("A force-local File cannot reference a remote URL."), frappe.ValidationError)
+
+
 class S3FileProxy:
 
 	def __init__(self, readFn, object_size):
@@ -376,10 +387,7 @@ class DFPExternalStorageFile(File):
 		# A transient flag lets server-owned workflows enforce a no-provider local
 		# private-File contract. It is valid only before a new File selects storage.
 		if getattr(getattr(self, "flags", None), "dfp_force_local_storage", False):
-			if str(getattr(self, "is_private", 0) or "").strip().lower() not in {"1", "true"}:
-				frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
-			if self.dfp_external_storage or self.dfp_external_storage_s3_key:
-				frappe.throw(_("A force-local File cannot select or retain external storage."), frappe.ValidationError)
+			_validate_force_local_file(self)
 			return False
 		if self.dfp_external_storage_ignored_doctypes():
 			self.dfp_external_storage = ""
@@ -635,9 +643,8 @@ def hook_file_before_save(doc, method):
 	previous = doc.get_doc_before_save()
 	# This check must precede storage resolution/client construction.
 	if getattr(getattr(doc, "flags", None), "dfp_force_local_storage", False):
-		if str(getattr(doc, "is_private", 0) or "").strip().lower() not in {"1", "true"}:
-			frappe.throw(_("Force-local storage is restricted to private Files."), frappe.ValidationError)
-		if previous or doc.dfp_external_storage or doc.dfp_external_storage_s3_key:
+		_validate_force_local_file(doc)
+		if previous:
 			frappe.throw(_("Force-local storage is allowed only for a new local File."), frappe.ValidationError)
 		doc.dfp_external_storage = ""
 		doc.dfp_external_storage_s3_key = ""
@@ -739,6 +746,7 @@ def _is_voice_artifact_archive_file(name: str) -> bool:
 
 	try:
 		table_exists = getattr(frappe.db, "table_exists", None)
+		# Frappe's API accepts a DocType label and checks ``tab{doctype}`` internally.
 		if callable(table_exists) and not table_exists(VOICE_ARTIFACT_ARCHIVE_DOCTYPE):
 			return False
 		return bool(frappe.db.exists(VOICE_ARTIFACT_ARCHIVE_DOCTYPE, {"file": name}))

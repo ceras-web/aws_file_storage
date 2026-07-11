@@ -79,6 +79,34 @@ class TestDFPExternalStorage(unittest.TestCase):
 		self.assertEqual(fake.dfp_external_storage, "")
 		self.assertEqual(fake.dfp_external_storage_s3_key, "")
 
+	def test_force_local_file_rejects_remote_urls_before_storage_resolution(self):
+		def raise_error(message, exc):
+			raise exc(message)
+
+		for file_url in (
+			"https://example.invalid/voice.mp3",
+			"http://example.invalid/voice.mp3",
+			"HTTPS://example.invalid/voice.mp3",
+			"/api/method/example.download",
+		):
+			with self.subTest(file_url=file_url):
+				fake = SimpleNamespace(
+					flags=SimpleNamespace(dfp_force_local_storage=True),
+					is_private=1,
+					file_url=file_url,
+					dfp_external_storage="",
+					dfp_external_storage_s3_key="",
+					get_doc_before_save=lambda: None,
+				)
+				with patch.object(frappe, "throw", side_effect=raise_error), self.assertRaisesRegex(
+					frappe.ValidationError, "cannot reference a remote URL"
+				):
+					hook_file_before_save(fake, "before_save")
+				with patch.object(frappe, "throw", side_effect=raise_error), self.assertRaisesRegex(
+					frappe.ValidationError, "cannot reference a remote URL"
+				):
+					DFPExternalStorageFile.dfp_external_storage_upload_file(fake)
+
 	def test_force_local_flag_cannot_reclassify_existing_or_selected_storage(self):
 		def raise_error(message, exc):
 			raise exc(message)
@@ -136,13 +164,14 @@ class TestDFPExternalStorage(unittest.TestCase):
 	def test_voice_archive_direct_route_denies_before_cache_or_provider_lookup(self):
 		def unexpected(*_args, **_kwargs):
 			raise AssertionError("cache, File, and provider paths must not be consulted")
+		table_exists_args = []
 
 		with (
 			patch.object(
 				frappe,
 				"db",
 				SimpleNamespace(
-					table_exists=lambda _doctype: True,
+					table_exists=lambda doctype: table_exists_args.append(doctype) or True,
 					exists=lambda _doctype, _filters: "ARCH-1",
 				),
 			),
@@ -151,6 +180,7 @@ class TestDFPExternalStorage(unittest.TestCase):
 			self.assertRaises(frappe.PageDoesNotExistError),
 		):
 			render_file("FILE-VOICE-1", "call.mp3")
+		self.assertEqual(table_exists_args, ["Voice Artifact Archive"])
 
 	def test_voice_archive_classification_error_fails_closed_before_cache(self):
 		def unexpected(*_args, **_kwargs):
